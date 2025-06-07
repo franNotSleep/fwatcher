@@ -1,6 +1,7 @@
 package main
 
 import (
+	"errors"
 	"flag"
 	"fmt"
 	"log"
@@ -23,49 +24,30 @@ type FWatchFS struct {
 type FWModInfo struct {
 	HasChanged bool
 	Info       *os.FileInfo
-	File       *os.File
 }
 
 func NewFWatchFS() *FWatchFS {
 	return &FWatchFS{Files: make(map[string]*os.File), lastModTime: time.Now()}
 }
 
-func (fw *FWatchFS) HasChanged(filename string) *FWModInfo {
+func (fw *FWatchFS) HasChanged(filename string) (*FWModInfo, error) {
 	var fwModInfo FWModInfo
 
-	f, ok := fw.Files[filename]
-	if !ok {
-		of, err := os.Open(filename)
-		if err != nil {
-			panic(err)
-		}
-
-		f = of
-		fw.Files[filename] = of
-	}
-
-	info, err := f.Stat()
+	info, err := os.Stat(filename)
 	if err != nil {
-		panic(err)
+		return &fwModInfo, err
 	}
 
 	fwModInfo.Info = &info
-	fwModInfo.File = f
-
-	if filename == "main.go" {
-		fmt.Printf("info mod: %s\n", info.ModTime())
-	} else {
-		fmt.Printf("filename %s\n", filename)
-	}
 
 	if info.ModTime().UnixMilli() > fw.lastModTime.UnixMilli() {
 		fw.lastModTime = info.ModTime()
 		fwModInfo.HasChanged = true
-		return &fwModInfo
+		return &fwModInfo, nil
 	}
 
 	fwModInfo.HasChanged = false
-	return &fwModInfo
+	return &fwModInfo, nil
 }
 
 func hasChange(filenames []string, fw *FWatchFS) bool {
@@ -74,14 +56,22 @@ func hasChange(filenames []string, fw *FWatchFS) bool {
 			continue
 		}
 
-		changeInfo := fw.HasChanged(filename)
+		changeInfo, err := fw.HasChanged(filename)
+		if err != nil {
+
+			if errors.Is(err, os.ErrNotExist) {
+				// this may be a symlic pointing to an empty location
+				return false
+			}
+			panic(err)
+		}
+
 		if changeInfo.HasChanged {
 			return true
 		}
 
 		if (*changeInfo.Info).IsDir() {
-			dirnames, err := (*changeInfo.File).ReadDir(0)
-			fmt.Printf("%+v\n", dirnames)
+			dirnames, err := os.ReadDir(filename)
 
 			if err != nil {
 				log.Fatal(err)
@@ -89,7 +79,6 @@ func hasChange(filenames []string, fw *FWatchFS) bool {
 
 			names := make([]string, len(dirnames))
 			for _, dirname := range dirnames {
-				fmt.Printf("name: %s\n", dirname.Name())
 				names = append(names, fmt.Sprintf("%s/%s", filename, dirname.Name()))
 			}
 
